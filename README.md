@@ -52,10 +52,10 @@ asking Claude Code to do next:
   `system` prompt + JSON schema in `App.jsx` (`runBrainstorm`, `runBuild`).
   A "Designer" agent that critiques the Architect's prototype, or a second
   build pass that iterates on feedback, would slot in the same way.
-- **Raise the prototype's token budget.** `max_tokens` is capped at 1000 in
-  both `callAgent.js` and `server/index.js` to keep things fast/cheap —
-  raise it in both places if you want the Architect to build bigger
-  prototypes.
+- **Raise the prototype's token budget further.** The Architect's build call
+  requests 4000 tokens (`callAgent.js` defaults to 1500 for the other
+  agents); `server/index.js` has no ceiling of its own, so bump the number
+  passed from `App.jsx` if a prototype is still getting cut off.
 - **Deploy it.** `npm run build` produces a static `dist/` for the frontend;
   the Express proxy needs to run somewhere too (a small Node host, a
   serverless function, etc.) — anywhere that can keep the API key secret.

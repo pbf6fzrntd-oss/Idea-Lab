@@ -146,9 +146,14 @@ export default function App() {
     setStatus("skeptic", "done");
     pushLog("skeptic", rankData.skeptic_note);
 
+    const norm = (s) => (s || "").trim().toLowerCase();
+    const usedIndices = new Set();
     const merged = rankData.ranked
       .map((r) => {
-        const base = brainstormData.ideas.find((i) => i.title === r.title) || brainstormData.ideas[0];
+        let idx = brainstormData.ideas.findIndex((i, n) => !usedIndices.has(n) && norm(i.title) === norm(r.title));
+        if (idx === -1) idx = brainstormData.ideas.findIndex((i, n) => !usedIndices.has(n));
+        usedIndices.add(idx);
+        const base = brainstormData.ideas[idx];
         return { ...base, score: r.score, verdict: r.verdict, id: uid() };
       })
       .sort((a, b) => b.score - a.score);
@@ -168,10 +173,10 @@ export default function App() {
 
       const system = `You are the Architect on a product innovation desk — you turn a chosen idea into a small, genuinely working prototype. Respond ONLY with strict JSON, no markdown fences. Schema:
 {"architect_note": string (1-2 sentences, first person, what you built and the core interaction), "stack": string (short, e.g. "Vanilla HTML/CSS/JS"), "html": string (a COMPLETE self-contained HTML document: <!doctype html> through </html>, all CSS in a <style> tag and all JS in a <script> tag, no external dependencies or network calls, dark-mode-friendly styling, must be genuinely interactive and functional, not a static mockup)}`;
-      const userPrompt = `Idea: ${idea.title}\nPitch: ${idea.pitch}\nSector: ${idea.sector}\nBuild a compact, working single-page prototype demonstrating the core interaction a user would have with this. Keep the code efficient — this has a tight token budget, so favor a small but real, functioning slice over a large but truncated one.`;
+      const userPrompt = `Idea: ${idea.title}\nPitch: ${idea.pitch}\nSector: ${idea.sector}\nBuild a compact, working single-page prototype demonstrating the core interaction a user would have with this.`;
 
       try {
-        const raw = await callAgent(system, userPrompt);
+        const raw = await callAgent(system, userPrompt, 8000);
         const data = parseJSON(raw);
         if (!data.html) throw new Error("No prototype code came back.");
         setPrototype(data);

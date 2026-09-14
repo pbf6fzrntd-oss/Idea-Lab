@@ -1,6 +1,6 @@
 // Talks to our local Express proxy (server/index.js), which holds the real
 // Anthropic API key server-side. The browser never sees the key.
-export async function callAgent(system, prompt, maxTokens = 1000) {
+export async function callAgent(system, prompt, maxTokens = 1500) {
   const res = await fetch("/api/agent", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
