@@ -1,45 +1,8 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-
+import dotenv from 'dotenv';
+import {createApp} from './app.js';
 dotenv.config();
-
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
-
-app.post("/api/agent", async (req, res) => {
-  const { system, prompt, max_tokens } = req.body || {};
-
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return res.status(500).json({ error: "Set ANTHROPIC_API_KEY in your .env file (see .env.example)." });
-  }
-  if (!prompt) {
-    return res.status(400).json({ error: "Missing 'prompt' in request body." });
-  }
-
-  try {
-    const upstream = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: max_tokens || 1000,
-        system,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    const data = await upstream.json();
-    if (!upstream.ok) return res.status(upstream.status).json(data);
-    res.json(data);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Agent proxy running on http://localhost:${PORT}`));
+const origin=process.env.APP_ORIGIN||'http://localhost:5173';
+if(process.env.NODE_ENV==='production' && !origin.startsWith('https://')) throw new Error('Production requires an HTTPS APP_ORIGIN.');
+const {app,close}=createApp({demo:process.env.IDEA_LAB_DEMO==='1',accessKey:process.env.IDEA_LAB_ACCESS_KEY,apiKey:process.env.ANTHROPIC_API_KEY,origin,database:process.env.IDEA_LAB_DATABASE||'.local/requests.sqlite'});
+const server=app.listen(process.env.PORT||3001,process.env.HOST||'127.0.0.1',()=>console.log('Idea Lab API started.'));
+process.on('SIGTERM',()=>server.close(()=>{close();process.exit(0);}));
