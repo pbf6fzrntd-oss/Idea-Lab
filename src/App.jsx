@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Radar, Users, Hammer, Loader2, History, Code2, Eye, Sparkles, ChevronRight, RotateCcw, AlertTriangle } from "lucide-react";
 import { callAgent, parseJSON } from "./lib/callAgent.js";
+import { validateBrief, validateRanking, validatePrototype, isolatedDocument } from "./lib/validation.js";
 import { storage } from "./lib/storage.js";
 
 const AGENTS = {
@@ -33,15 +34,17 @@ export default function App() {
   const [showCode, setShowCode] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyIndex, setHistoryIndex] = useState([]);
-  const [sessionId, setSessionId] = useState(null);
+  const sessionRef = useRef(null);
+  const setSessionId = id => { sessionRef.current = id; };
   const [viewingHistory, setViewingHistory] = useState(false);
   const feedEndRef = useRef(null);
+  const activeRef = useRef(false);
 
   useEffect(() => {
     (async () => {
       const r = await storage.get("sessions-index");
       if (r?.value) setHistoryIndex(JSON.parse(r.value));
-    })();
+    })().catch(() => setErrorMsg("Session history is unavailable in this browser."));
   }, []);
 
   useEffect(() => {
@@ -58,7 +61,7 @@ export default function App() {
 
   async function saveSession(finalIdeas, finalPrototype, finalSelected) {
     try {
-      const id = sessionId || uid();
+      const id = sessionRef.current || uid();
       const record = {
         id,
         topic: topic.trim() || "(open-ended)",
@@ -67,7 +70,6 @@ export default function App() {
         selected: finalSelected,
         prototype: finalPrototype,
       };
-      await storage.set("session:" + id, JSON.stringify(record));
       const entry = {
         id,
         topic: record.topic,
@@ -76,20 +78,17 @@ export default function App() {
         topScore: finalIdeas?.[0]?.score ?? null,
         built: !!finalPrototype,
       };
-      const idxRes = await storage.get("sessions-index");
-      let list = idxRes?.value ? JSON.parse(idxRes.value) : [];
-      list = list.filter((s) => s.id !== id);
-      list.unshift(entry);
-      list = list.slice(0, 25);
-      await storage.set("sessions-index", JSON.stringify(list));
+      const list = await storage.save(record, entry);
       setHistoryIndex(list);
       setSessionId(id);
     } catch (e) {
-      /* persistence is best-effort */
+      setErrorMsg("Your result is available, but saving failed. Export it before leaving: " + e.message);
     }
   }
 
   const runBrainstorm = useCallback(async () => {
+    if (activeRef.current) return;
+    activeRef.current = true;
     setViewingHistory(false);
     setPhase("brainstorming");
     setErrorMsg("");
@@ -97,12 +96,12 @@ export default function App() {
     setIdeas([]);
     setSelected(null);
     setPrototype(null);
-    setSessionId(null);
+    setSessionId(uid());
     setAgentStatus({ scout: "active", strategist: "active", skeptic: "idle", architect: "idle" });
 
     const topicLine = topic.trim()
       ? `Focus area / seed topic given by the user: "${topic.trim()}"`
-      : "No topic was given — choose a genuinely current, plausible cross-industry trend yourself.";
+      : "No topic was given — choose a plausible workflow to explore. Treat market demand as an unverified hypothesis.";
 
     const system = `You are running a two-person product innovation desk inside a software brainstorming lab. Respond ONLY with strict JSON, no markdown fences, no commentary outside the JSON. Schema:
 {"scout_note": string (2-3 sentences, first person as the Trend Scout, on why this space is hot right now and the sharpest angle on it), "strategist_note": string (2-3 sentences, first person as the Product Strategist, framing the concrete gap in existing tools), "ideas": [ {"title": string (short product name), "pitch": string (1-2 sentences, what it does and for whom), "sector": string (short label, e.g. "Healthcare Ops")} — exactly 5 items, spanning different angles on the topic ]}`;
@@ -111,12 +110,14 @@ export default function App() {
     let brainstormData;
     try {
       const raw = await callAgent(system, userPrompt);
-      brainstormData = parseJSON(raw);
+      brainstormData = validateBrief(parseJSON(raw));
+      setIdeas(brainstormData.ideas);
       if (!Array.isArray(brainstormData.ideas) || brainstormData.ideas.length === 0) throw new Error("Malformed idea list.");
     } catch (e) {
       setPhase("error");
       setErrorMsg("The Scout and Strategist couldn't agree on a clean brief (" + e.message + "). Try again, maybe with a narrower topic.");
       setAgentStatus({ scout: "idle", strategist: "idle", skeptic: "idle", architect: "idle" });
+      activeRef.current = false;
       return;
     }
 
@@ -128,46 +129,39 @@ export default function App() {
     setPhase("ranking");
     setStatus("skeptic", "active");
     const rankSystem = `You are the Skeptic on a product innovation desk — a sharp, fair feasibility critic. Respond ONLY with strict JSON, no markdown fences. Schema:
-{"skeptic_note": string (2-3 sentences, first person, your overall read on this batch of ideas), "ranked": [ {"title": string (must exactly match one given title), "score": integer 1-10 (build-worthiness: feasibility + real demand), "verdict": string (one sharp sentence on its biggest strength or risk)} — one entry per idea given, sorted highest score first ]}`;
-    const rankPrompt = `Topic: ${topic.trim() || "(open-ended trend)"}\nIdeas to score:\n${brainstormData.ideas.map((i, n) => `${n + 1}. ${i.title} — ${i.pitch} [${i.sector}]`).join("\n")}`;
+{"skeptic_note": string (2-3 sentences, first person, your overall read on this batch of ideas), "ranked": [ {"id": string (must exactly match one given id), "score": integer 1-10 (build-worthiness: feasibility + real demand), "verdict": string (one sharp sentence on its biggest strength or risk)} — one entry per idea given, sorted highest score first ]}`;
+    const rankPrompt = `Topic: ${topic.trim() || "(open-ended trend)"}\nIdeas to score:\n${JSON.stringify(brainstormData.ideas)}`;
 
     let rankData;
     try {
       const raw = await callAgent(rankSystem, rankPrompt);
       rankData = parseJSON(raw);
-      if (!Array.isArray(rankData.ranked)) throw new Error("Malformed ranking.");
+      validateRanking(rankData, brainstormData.ideas);
     } catch (e) {
       setPhase("error");
       setErrorMsg("The Skeptic choked on scoring (" + e.message + "). The ideas above are still valid — try again to get them ranked.");
       setStatus("skeptic", "idle");
+      activeRef.current = false;
       return;
     }
 
     setStatus("skeptic", "done");
     pushLog("skeptic", rankData.skeptic_note);
 
-    const norm = (s) => (s || "").trim().toLowerCase();
-    const usedIndices = new Set();
-    const merged = rankData.ranked
-      .map((r) => {
-        let idx = brainstormData.ideas.findIndex((i, n) => !usedIndices.has(n) && norm(i.title) === norm(r.title));
-        if (idx === -1) idx = brainstormData.ideas.findIndex((i, n) => !usedIndices.has(n));
-        usedIndices.add(idx);
-        const base = brainstormData.ideas[idx];
-        return { ...base, score: r.score, verdict: r.verdict, id: uid() };
-      })
-      .sort((a, b) => b.score - a.score);
+    const merged = validateRanking(rankData, brainstormData.ideas);
 
     setIdeas(merged);
     setPhase("ranked");
-    saveSession(merged, null, null);
-  }, [topic, sessionId]);
+    await saveSession(merged, null, null);
+    activeRef.current = false;
+  }, [topic]);
 
   const runBuild = useCallback(
     async (idea) => {
+      if (activeRef.current) return;
+      activeRef.current = true;
       setPhase("building");
       setSelected(idea);
-      setPrototype(null);
       setShowCode(false);
       setStatus("architect", "active");
 
@@ -177,22 +171,24 @@ export default function App() {
 
       try {
         const raw = await callAgent(system, userPrompt, 8000);
-        const data = parseJSON(raw);
+        const data = validatePrototype(parseJSON(raw));
         if (!data.html) throw new Error("No prototype code came back.");
         setPrototype(data);
         setStatus("architect", "done");
         setPhase("built");
-        saveSession(ideas, data, idea);
+        await saveSession(ideas, data, idea);
       } catch (e) {
         setPhase("error");
         setErrorMsg("The Architect's build failed (" + e.message + "). You can try building this idea again.");
         setStatus("architect", "idle");
-      }
+      } finally { activeRef.current = false; }
     },
     [ideas]
   );
 
   async function openHistorySession(id) {
+    if (activeRef.current) return;
+    try {
     const r = await storage.get("session:" + id);
     if (!r?.value) return;
     const record = JSON.parse(r.value);
@@ -212,9 +208,11 @@ export default function App() {
     setViewingHistory(true);
     setHistoryOpen(false);
     setShowCode(false);
+    } catch (e) { setErrorMsg("Unable to open this session: " + e.message); }
   }
 
   function startFresh() {
+    if (activeRef.current) return;
     setTopic("");
     setPhase("idle");
     setLog([]);
@@ -248,6 +246,7 @@ export default function App() {
       `}</style>
 
       <div style={styles.header}>
+        {!!ideas.length && <button disabled={busy} onClick={() => { const url = URL.createObjectURL(new Blob([JSON.stringify({topic, ideas, selected, prototype}, null, 2)], {type: "application/json"})); const a = document.createElement("a"); a.href=url; a.download="idea-lab-session.json"; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }}>Export session</button>}
         <div style={styles.brand}>
           <Sparkles size={18} color="#E4A33B" />
           <span style={styles.brandText}>Idea Lab</span>
@@ -406,7 +405,7 @@ export default function App() {
             {showCode ? (
               <pre style={styles.codeBlock}>{prototype.html}</pre>
             ) : (
-              <iframe title="prototype" srcDoc={prototype.html} style={styles.iframe} sandbox="allow-scripts allow-forms allow-same-origin" />
+              <iframe title="prototype" srcDoc={isolatedDocument(prototype.html)} style={styles.iframe} sandbox="allow-scripts" referrerPolicy="no-referrer" />
             )}
           </div>
         </div>

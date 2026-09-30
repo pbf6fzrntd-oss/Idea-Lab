@@ -66,3 +66,7 @@ asking Claude Code to do next:
 - The Architect's prototypes are self-contained HTML/CSS/JS (no external
   dependencies), rendered in a sandboxed `<iframe>` in the Preview tab, with
   a raw source view in the Code tab.
+
+## Demo and private pilot release
+
+See [docs/RELEASE.md](docs/RELEASE.md) for the current setup and release limits. Node 24 is required. Default example mode makes no paid calls. Live mode requires the server-side provider key **and** a private-pilot access key; all POST requests require the configured exact origin. Generated previews no longer receive same-origin permission. Sessions are browser-local; export important results.
